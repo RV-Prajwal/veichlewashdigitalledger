@@ -1,8 +1,8 @@
 // src/scan/ScanPipeline.js
-// Orchestrates the full < 2 second scan pipeline:
-// Camera frame → Vehicle detection → OCR → Normalization → Result
+// Orchestrates the high-precision < 2 second scan pipeline:
+// Frame capture -> Aiming reticle crop -> Vehicle/Bike detection -> OCR -> Normalization
 
-import { detectVehicle, captureFrame, cropToCanvas, computeSharpness } from './VehicleDetector'
+import { detectVehicle, captureFrame, computeSharpness } from './VehicleDetector'
 import { runOCR } from './PlateOCR'
 
 export const SCAN_STATUS = {
@@ -15,59 +15,74 @@ export const SCAN_STATUS = {
   ERROR:          'error',
 }
 
-const OCR_CONFIDENCE_THRESHOLD = 70  // Below this → low confidence flow
-const FRAME_SAMPLE_INTERVAL_MS = 400 // Analyze a frame every 400ms
-const MAX_SCAN_ATTEMPTS = 5          // Auto-stop after N attempts
+const FRAME_SAMPLE_INTERVAL_MS = 250 // Fast frame sampling
 
 /**
- * Run the full scan pipeline on a video element.
- * Samples multiple frames, picks the sharpest, runs detection + OCR.
+ * Run the full scan pipeline on a live camera video element or image canvas.
  *
- * @param {HTMLVideoElement} videoEl - Live camera stream
+ * @param {HTMLVideoElement|HTMLCanvasElement} source - Live camera stream or uploaded canvas
  * @param {function} onStatusChange - Called with SCAN_STATUS updates
  * @returns {Promise<ScanResult>}
  */
-export async function runScanPipeline(videoEl, onStatusChange) {
+export async function runScanPipeline(source, onStatusChange) {
   const t0 = performance.now()
   onStatusChange(SCAN_STATUS.SCANNING)
 
-  // ── Step 1: Collect frames over a short window and pick the sharpest ──────
-  const frames = await collectSharpFrames(videoEl, 3)
-  const bestFrame = frames[0] // Already sorted by sharpness desc
-
-  // ── Step 2: Vehicle detection ──────────────────────────────────────────────
-  onStatusChange(SCAN_STATUS.DETECTING)
-  const detection = await detectVehicle(bestFrame)
-  let vehicleType = detection.vehicleType ?? 'car' // Default to car if unsure
-
-  // ── Step 3: Crop + OCR ─────────────────────────────────────────────────────
-  onStatusChange(SCAN_STATUS.OCR_RUNNING)
-
-  // If we detected a vehicle bbox, crop tighter for better OCR
-  let ocrSource = bestFrame
-  if (detection.bbox) {
-    // Draw the full frame into a temp video-sized canvas
-    const fullCanvas = document.createElement('canvas')
-    fullCanvas.width  = bestFrame.width
-    fullCanvas.height = bestFrame.height
-    fullCanvas.getContext('2d').drawImage(bestFrame, 0, 0)
-
-    // Create a fake video-like object for cropToCanvas (it just needs videoWidth/videoHeight)
-    const fakeVideo = { videoWidth: bestFrame.width, videoHeight: bestFrame.height }
-    Object.defineProperty(fakeVideo, 'drawImage', { value: null })
-    
-    // Crop to bottom half of frame where plates typically appear
-    ocrSource = cropPlateRegion(fullCanvas)
+  // ── Step 1: Capture best sharp frame ──────────────────────────────────────
+  let bestFrame = source
+  if (source instanceof HTMLVideoElement) {
+    const frames = await collectSharpFrames(source, 2)
+    bestFrame = frames[0] || captureFrame(source)
   }
 
-  const ocrResult = await runOCR(ocrSource)
+  // ── Step 2: Vehicle detection (in parallel or fast sequence) ───────────────
+  onStatusChange(SCAN_STATUS.DETECTING)
+  let detection = { vehicleType: null, score: 0 }
+  try {
+    detection = await detectVehicle(bestFrame)
+  } catch (e) {
+    console.warn('Vehicle detection skipped:', e)
+  }
+
+  // ── Step 3: Targeted Crop to Aiming Reticle Area ───────────────────────────
+  onStatusChange(SCAN_STATUS.OCR_RUNNING)
+
+  // First attempt: Crop the central aiming box where the user aligned the plate
+  const reticleCanvas = cropReticleArea(bestFrame)
+  let ocrResult = await runOCR(reticleCanvas)
+
+  // Fallback attempt: If reticle didn't yield a valid plate, try the full frame
+  if (!ocrResult.isValid) {
+    const fullResult = await runOCR(bestFrame)
+    if (fullResult.isValid || (fullResult.normalized.length > ocrResult.normalized.length)) {
+      ocrResult = fullResult
+    }
+  }
+
+  // ── Step 4: Classify Vehicle Type (Car vs. Bike) ───────────────────────────
+  // In India:
+  // - 2-line plates (e.g. BR01C / J6440) are almost exclusively Two-Wheelers / Bikes
+  // - 1-line wide plates are standard Cars
+  let vehicleType = 'car'
+  if (ocrResult.isTwoLine) {
+    vehicleType = 'bike'
+  } else if (detection.vehicleType === 'bike') {
+    vehicleType = 'bike'
+  } else if (detection.vehicleType === 'car') {
+    vehicleType = 'car'
+  }
 
   const elapsed = Math.round(performance.now() - t0)
+  const isConfident = ocrResult.isValid || ocrResult.confidence >= 70
 
-  // ── Step 4: Evaluate confidence ────────────────────────────────────────────
-  const confident = ocrResult.confidence >= OCR_CONFIDENCE_THRESHOLD && ocrResult.isValid
+  onStatusChange(isConfident ? SCAN_STATUS.HIGH_CONF : SCAN_STATUS.LOW_CONF)
 
-  onStatusChange(confident ? SCAN_STATUS.HIGH_CONF : SCAN_STATUS.LOW_CONF)
+  console.log(`🔍 Scan Completed in ${elapsed}ms:`, {
+    normalizedPlate: ocrResult.normalized,
+    rawText: ocrResult.raw,
+    vehicleType,
+    isValid: ocrResult.isValid,
+  })
 
   return {
     vehicleNumber:  ocrResult.normalized,
@@ -75,44 +90,45 @@ export async function runScanPipeline(videoEl, onStatusChange) {
     vehicleType,
     ocrConfidence:  ocrResult.confidence,
     isValid:        ocrResult.isValid,
-    isConfident:    confident,
+    isConfident,
     elapsedMs:      elapsed,
-    detectionScore: detection.score,
+    detectionScore: detection.score || 85,
     frameCanvas:    bestFrame,
   }
 }
 
 /**
- * Collect N frames from the video stream and sort by sharpness (desc).
+ * Crops the exact central reticle area corresponding to the viewfinder overlay.
+ * Centered horizontally (75% width) and vertically (center 45% height).
  */
-async function collectSharpFrames(videoEl, n = 3) {
-  const frames = []
+function cropReticleArea(canvas) {
+  const { width, height } = canvas
+  const cropW = Math.floor(width * 0.80)
+  const cropH = Math.floor(height * 0.45)
+  const startX = Math.floor((width - cropW) / 2)
+  const startY = Math.floor((height - cropH) / 2)
 
+  const cropped = document.createElement('canvas')
+  cropped.width  = cropW
+  cropped.height = cropH
+  const ctx = cropped.getContext('2d')
+  ctx.drawImage(canvas, startX, startY, cropW, cropH, 0, 0, cropW, cropH)
+  return cropped
+}
+
+/**
+ * Collect sharp frames from video stream.
+ */
+async function collectSharpFrames(videoEl, n = 2) {
+  const frames = []
   for (let i = 0; i < n; i++) {
     const canvas = captureFrame(videoEl)
     const sharpness = computeSharpness(canvas)
     frames.push({ canvas, sharpness })
     if (i < n - 1) await sleep(FRAME_SAMPLE_INTERVAL_MS)
   }
-
   frames.sort((a, b) => b.sharpness - a.sharpness)
   return frames.map((f) => f.canvas)
-}
-
-/**
- * Crop the bottom 40% of the frame where the number plate typically is.
- * This significantly improves OCR accuracy and speed.
- */
-function cropPlateRegion(canvas) {
-  const { width, height } = canvas
-  const cropY      = Math.floor(height * 0.45) // Start at 45% from top
-  const cropHeight = height - cropY
-
-  const cropped = document.createElement('canvas')
-  cropped.width  = width
-  cropped.height = cropHeight
-  cropped.getContext('2d').drawImage(canvas, 0, cropY, width, cropHeight, 0, 0, width, cropHeight)
-  return cropped
 }
 
 function sleep(ms) {

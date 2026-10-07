@@ -1,117 +1,174 @@
 // src/scan/TextNormalizer.js
-// Normalizes raw OCR output into a clean Indian vehicle registration number.
-// Zero network calls — pure synchronous JS — runs in < 5ms.
+// High precision Indian vehicle registration number extractor & normalizer
+// Supports 1-line car plates, 2-line bike plates, HSRP plates with 'IND' badge, and common OCR confusions
 
-/**
- * Indian plate format: SS DD LL NNNN
- * Examples: "KA 01 NC 8564", "KA-01-NC-8564", "ka01nc8564"
- * Target:   "KA01NC8564"
- */
+export const INDIAN_STATES = [
+  'AN', 'AP', 'AR', 'AS', 'BR', 'CG', 'CH', 'DD', 'DL', 'DN', 'GA', 'GJ', 'HP', 'HR',
+  'JH', 'JK', 'KA', 'KL', 'LA', 'LD', 'MH', 'ML', 'MN', 'MP', 'MZ', 'NL', 'OD', 'OR',
+  'PB', 'PY', 'RJ', 'SK', 'TN', 'TR', 'TS', 'UK', 'UA', 'UP', 'WB', 'BH'
+]
 
-const INDIAN_PLATE_REGEX = /^[A-Z]{2}\d{2}[A-Z]{1,3}\d{4}$/
-
-// Common OCR character confusions (zone-aware corrections)
-const CHAR_FIXES_IN_DIGIT_ZONE = {
-  O: '0',
-  o: '0',
-  I: '1',
-  i: '1',
-  l: '1',
-  B: '8', // only when in digit zone and context suggests it
-  S: '5',
-  Z: '2',
+// Common character replacements in digit positions
+const DIGIT_FIXES = {
+  O: '0', o: '0',
+  I: '1', i: '1', l: '1', '|': '1',
+  Z: '2', z: '2',
+  S: '5', s: '5',
   G: '6',
+  B: '8',
 }
 
-const CHAR_FIXES_IN_ALPHA_ZONE = {
-  0: 'O',
-  1: 'I',
-  5: 'S',
-  6: 'G',
+// Common character replacements in alphabet positions
+const ALPHA_FIXES = {
+  '0': 'O',
+  '1': 'I',
+  '5': 'S',
+  '8': 'B',
 }
 
 /**
- * Main normalization entry point.
- * @param {string} raw - Raw OCR text
- * @returns {{ normalized: string, isValid: boolean, confidence: number }}
+ * Normalizes raw OCR text into a clean Indian vehicle registration plate.
+ * Handles both 1-line and 2-line plates (e.g. BR 01 C / J 6440 -> BR01CJ6440).
+ *
+ * @param {string} raw - Raw output from OCR engine
+ * @returns {{ normalized: string, raw: string, isValid: boolean, isTwoLine: boolean, confidence: number }}
  */
 export function normalizePlate(raw) {
-  if (!raw) return { normalized: '', isValid: false, confidence: 0 }
+  if (!raw) return { normalized: '', raw: '', isValid: false, isTwoLine: false, confidence: 0 }
 
-  // Step 1: Strip separators, trim, uppercase
-  let text = raw.replace(/[\s\-\.\_]/g, '').toUpperCase().trim()
+  const trimmedRaw = String(raw).trim()
+  const lines = trimmedRaw.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean)
+  const isTwoLine = lines.length >= 2
 
-  // Step 2: Remove any characters that aren't alphanumeric
-  text = text.replace(/[^A-Z0-9]/g, '')
+  // 1. Remove common noise tokens (IND badge, HSRP logo, manufacturer names)
+  let cleaned = trimmedRaw
+    .toUpperCase()
+    .replace(/\bIND\b/g, '')
+    .replace(/\bINDIA\b/g, '')
+    .replace(/\bHSRP\b/g, '')
+    .replace(/[^A-Z0-9]/g, '')
 
-  // Step 3: Apply zone-aware character corrections
-  text = applyZoneCorrections(text)
+  // Remove leading IND if glued to text (e.g. "INDBR01CJ6440" -> "BR01CJ6440")
+  if (cleaned.startsWith('IND') && cleaned.length > 9) {
+    cleaned = cleaned.slice(3)
+  }
 
-  // Step 4: Length check — Indian plates are 9-10 chars after normalization
-  const isValid = INDIAN_PLATE_REGEX.test(text)
+  // Bharat Series match (e.g. 22BH1234AA)
+  const bhMatch = cleaned.match(/(\d{2}BH\d{4}[A-Z]{1,2})/)
+  if (bhMatch) {
+    return {
+      normalized: bhMatch[1],
+      raw: trimmedRaw,
+      isValid: true,
+      isTwoLine,
+      confidence: 96,
+    }
+  }
 
-  // Step 5: Confidence heuristic based on format match
-  const confidence = computeFormatConfidence(text)
+  // 2. Locate first valid Indian state code in string
+  let candidate = cleaned
+  let foundStateIdx = -1
+  let matchedState = ''
 
-  return { normalized: text, isValid, confidence }
+  for (const st of INDIAN_STATES) {
+    const idx = cleaned.indexOf(st)
+    if (idx !== -1 && (foundStateIdx === -1 || idx < foundStateIdx)) {
+      foundStateIdx = idx
+      matchedState = st
+    }
+  }
+
+  // If no state found, check if first 2 characters can be fixed to a valid state
+  if (foundStateIdx === -1 && cleaned.length >= 2) {
+    const c0 = ALPHA_FIXES[cleaned[0]] || cleaned[0]
+    const c1 = ALPHA_FIXES[cleaned[1]] || cleaned[1]
+    const potentialState = c0 + c1
+    if (INDIAN_STATES.includes(potentialState)) {
+      cleaned = potentialState + cleaned.slice(2)
+      foundStateIdx = 0
+      matchedState = potentialState
+    }
+  }
+
+  if (foundStateIdx !== -1) {
+    candidate = cleaned.slice(foundStateIdx)
+  }
+
+  // 3. Zone-aware character correction:
+  // Format: [2 State letters][1-2 District digits][1-3 Series letters][4 Number digits]
+  if (candidate.length >= 7) {
+    // Truncate extraneous trailing noise
+    candidate = candidate.slice(0, 10)
+    const chars = candidate.split('')
+
+    // Position 0-1: State Code (Force Alpha)
+    if (ALPHA_FIXES[chars[0]]) chars[0] = ALPHA_FIXES[chars[0]]
+    if (ALPHA_FIXES[chars[1]]) chars[1] = ALPHA_FIXES[chars[1]]
+
+    // Position 2: District digit (Force Digit)
+    if (chars.length > 2 && DIGIT_FIXES[chars[2]]) chars[2] = DIGIT_FIXES[chars[2]]
+
+    // Position 3: District digit or series letter
+    // If followed by digits, it might be district digit
+    if (chars.length > 3 && /[0-9]/.test(chars[2]) && DIGIT_FIXES[chars[3]] && chars.length >= 9) {
+      chars[3] = DIGIT_FIXES[chars[3]]
+    }
+
+    // Last 4 positions: Unique vehicle number (Must be digits)
+    const len = chars.length
+    const digitZoneStart = Math.max(4, len - 4)
+    for (let i = digitZoneStart; i < len; i++) {
+      if (DIGIT_FIXES[chars[i]]) chars[i] = DIGIT_FIXES[chars[i]]
+    }
+
+    // Middle Series letters zone: between district digits and last 4 numbers
+    if (chars.length >= 9 && /[0-9]/.test(chars[2]) && /[0-9]/.test(chars[3])) {
+      for (let i = 4; i < digitZoneStart; i++) {
+        if (ALPHA_FIXES[chars[i]]) chars[i] = ALPHA_FIXES[chars[i]]
+      }
+    }
+
+    candidate = chars.join('')
+  }
+
+  // 4. Validate Indian registration pattern
+  // Standard: KA01NC8564 or KA1NC8564 or BH series 22BH1234AA
+  const isValid =
+    /^[A-Z]{2}\d{2}[A-Z]{1,3}\d{4}$/.test(candidate) ||
+    /^[A-Z]{2}\d{1}[A-Z]{1,3}\d{4}$/.test(candidate) ||
+    /^\d{2}BH\d{4}[A-Z]{1,2}$/.test(candidate)
+
+  // 5. Confidence scoring
+  let confidence = 0
+  if (isValid) {
+    confidence = 96
+  } else if (candidate.length >= 7 && matchedState) {
+    confidence = 75
+  } else if (candidate.length >= 4) {
+    confidence = 50
+  }
+
+  return {
+    normalized: candidate,
+    raw: trimmedRaw,
+    isValid,
+    isTwoLine,
+    confidence,
+  }
 }
 
 /**
- * Apply zone-specific character corrections.
- * Indian plate: [2 alpha][2 digit][1-3 alpha][4 digit]
- * We fix chars that are clearly in the wrong zone.
- */
-function applyZoneCorrections(text) {
-  if (text.length < 6) return text
-
-  const chars = text.split('')
-
-  // Positions 0-1: State code (must be alpha)
-  for (let i = 0; i <= 1 && i < chars.length; i++) {
-    if (CHAR_FIXES_IN_ALPHA_ZONE[chars[i]]) chars[i] = CHAR_FIXES_IN_ALPHA_ZONE[chars[i]]
-  }
-
-  // Positions 2-3: District code (must be digit)
-  for (let i = 2; i <= 3 && i < chars.length; i++) {
-    if (CHAR_FIXES_IN_DIGIT_ZONE[chars[i]]) chars[i] = CHAR_FIXES_IN_DIGIT_ZONE[chars[i]]
-  }
-
-  // Positions 4 to (len-4): Series letters (must be alpha)
-  const seriesEnd = chars.length - 4
-  for (let i = 4; i < seriesEnd && i < chars.length; i++) {
-    if (CHAR_FIXES_IN_ALPHA_ZONE[chars[i]]) chars[i] = CHAR_FIXES_IN_ALPHA_ZONE[chars[i]]
-  }
-
-  // Last 4 positions: Unique number (must be digit)
-  for (let i = Math.max(4, chars.length - 4); i < chars.length; i++) {
-    if (CHAR_FIXES_IN_DIGIT_ZONE[chars[i]]) chars[i] = CHAR_FIXES_IN_DIGIT_ZONE[chars[i]]
-  }
-
-  return chars.join('')
-}
-
-/**
- * Compute a format-match confidence score (0–100).
- * This complements OCR engine confidence.
- */
-function computeFormatConfidence(text) {
-  if (!text) return 0
-  if (INDIAN_PLATE_REGEX.test(text)) return 95 // Perfect match
-
-  let score = 0
-  if (text.length >= 9 && text.length <= 10) score += 40
-  if (/^[A-Z]{2}/.test(text)) score += 20       // Valid state code start
-  if (/\d{2}[A-Z]+\d{4}$/.test(text)) score += 30  // Valid suffix pattern
-  return Math.min(score, 90)
-}
-
-/**
- * Format plate for display: "KA01NC8564" → "KA 01 NC 8564"
+ * Format plate for human display: "BR01CJ6440" -> "BR 01 CJ 6440"
  */
 export function formatPlateDisplay(normalized) {
-  if (!normalized || normalized.length < 9) return normalized
-  // Match: (2 alpha)(2 digit)(1-3 alpha)(4 digit)
-  const m = normalized.match(/^([A-Z]{2})(\d{2})([A-Z]{1,3})(\d{4})$/)
-  if (m) return `${m[1]} ${m[2]} ${m[3]} ${m[4]}`
+  if (!normalized) return ''
+  const m = normalized.match(/^([A-Z]{2})(\d{1,2})([A-Z]{1,3})(\d{4})$/)
+  if (m) {
+    return `${m[1]} ${m[2]} ${m[3]} ${m[4]}`
+  }
+  const bh = normalized.match(/^(\d{2})(BH)(\d{4})([A-Z]{1,2})$/)
+  if (bh) {
+    return `${bh[1]} ${bh[2]} ${bh[3]} ${bh[4]}`
+  }
   return normalized
 }

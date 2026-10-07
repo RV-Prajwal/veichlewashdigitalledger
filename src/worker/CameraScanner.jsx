@@ -163,19 +163,18 @@ export default function CameraScanner({ onScanComplete, onClose, isModelReady })
         if (stream) stream.getTracks().forEach((t) => t.stop())
 
         onScanComplete({
-          vehicleNumber: result.vehicleNumber || 'KA01NC8564',
+          vehicleNumber: result.vehicleNumber || '',
           vehicleType: result.vehicleType || 'car',
-          ocrConfidence: result.ocrConfidence || 95,
+          ocrConfidence: result.ocrConfidence || 80,
           elapsedMs: totalTime,
         })
       } catch (err) {
         console.error('File scan error:', err)
-        // Fallback default sample
         onScanComplete({
-          vehicleNumber: 'KA01NC8564',
+          vehicleNumber: '',
           vehicleType: 'car',
-          ocrConfidence: 94,
-          elapsedMs: 220,
+          ocrConfidence: 50,
+          elapsedMs: 300,
         })
       } finally {
         setIsProcessing(false)
@@ -435,6 +434,13 @@ export default function CameraScanner({ onScanComplete, onClose, isModelReady })
                 style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
               >
                 🚗 KA01NC8564 (Car)
+              </button>
+              <button
+                onClick={() => handleSamplePlate('BR01CJ6440', 'bike')}
+                className="btn btn-ghost btn-sm"
+                style={{ fontFamily: 'var(--font-mono)', fontSize: 12, borderColor: 'rgba(6,214,160,0.4)' }}
+              >
+                🏍️ BR01CJ6440 (Bike)
               </button>
               <button
                 onClick={() => handleSamplePlate('KA03AN0368', 'bike')}

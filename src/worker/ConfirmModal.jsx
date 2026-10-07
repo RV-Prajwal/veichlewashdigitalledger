@@ -21,6 +21,16 @@ export default function ConfirmModal({ scanData, worker, onSaved, onCancel }) {
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })
   })
 
+  // Sync scanData updates
+  useEffect(() => {
+    if (scanData?.vehicleNumber) {
+      setVehicleNumber(scanData.vehicleNumber)
+    }
+    if (scanData?.vehicleType) {
+      setVehicleType(scanData.vehicleType)
+    }
+  }, [scanData])
+
   // Load available services for this vehicle type
   useEffect(() => {
     async function load() {
@@ -178,16 +188,29 @@ export default function ConfirmModal({ scanData, worker, onSaved, onCancel }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {/* Registration Number Field */}
           <div className="input-group">
-            <label className="input-label">Vehicle Registration Number</label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label className="input-label">Vehicle Registration Number</label>
+              {vehicleNumber ? (
+                <span style={{ fontSize: 11, color: '#06d6a0', fontWeight: 700 }}>✓ Plate Detected</span>
+              ) : (
+                <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 700 }}>⚠️ Enter Number</span>
+              )}
+            </div>
             <div style={{ position: 'relative' }}>
               <input
                 type="text"
                 className="input input--mono"
-                style={{ fontSize: 20, fontWeight: 700, paddingRight: 40 }}
+                style={{
+                  fontSize: 22,
+                  fontWeight: 800,
+                  paddingRight: 40,
+                  letterSpacing: '0.08em',
+                  borderColor: vehicleNumber ? 'rgba(6,214,160,0.4)' : 'rgba(245,158,11,0.5)',
+                }}
                 value={vehicleNumber}
-                onChange={(e) => setVehicleNumber(e.target.value.toUpperCase())}
-                placeholder="KA01NC8564"
-                autoFocus
+                onChange={(e) => setVehicleNumber(e.target.value.toUpperCase().replace(/[\s\-\.]/g, ''))}
+                placeholder="TYPE NUMBER HERE"
+                autoFocus={!vehicleNumber}
               />
               <span
                 style={{
@@ -203,7 +226,9 @@ export default function ConfirmModal({ scanData, worker, onSaved, onCancel }) {
               </span>
             </div>
             <div style={{ fontSize: 11, color: '#94a3b8' }}>
-              Tap to edit manually if license plate OCR needs correction
+              {vehicleNumber
+                ? 'Extracted via camera OCR • Tap above to correct if needed'
+                : 'OCR was unable to read the plate clearly • Please type it above'}
             </div>
           </div>
 
