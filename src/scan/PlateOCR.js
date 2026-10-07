@@ -1,5 +1,5 @@
 // src/scan/PlateOCR.js
-// Optimized Tesseract.js engine for Indian number plates (1-line car & 2-line bike plates)
+// Production OCR: Backend EasyOCR + Tesseract.js fallback for Indian license plates
 
 import Tesseract from 'tesseract.js'
 import { normalizePlate } from './TextNormalizer'
@@ -18,7 +18,45 @@ let _worker = null
 let _initPromise = null
 
 /**
- * Pre-initialize the Tesseract worker with multi-line block recognition (PSM 6).
+ * Send cropped plate canvas to backend for EasyOCR extraction.
+ * Gracefully falls back to Tesseract if backend is unavailable.
+ */
+export async function extractPlateWithBackend(canvasBlob, region = 'center') {
+  try {
+    const formData = new FormData()
+    formData.append('image', canvasBlob, 'plate.jpg')
+    formData.append('region', region)
+
+    const response = await fetch('/.netlify/functions/ocr', {
+      method: 'POST',
+      body: formData,
+      timeout: 5000,
+    })
+
+    if (!response.ok) {
+      console.warn(`Backend OCR failed (${response.status})`)
+      return null
+    }
+
+    const result = await response.json()
+    console.log('✅ Backend OCR:', result.plate, `(${result.confidence}%)`)
+
+    return {
+      normalized: result.plate,
+      raw: result.raw,
+      confidence: result.confidence,
+      isValid: result.isValid,
+      isTwoLine: '\n' in (result.raw || ''),
+      source: 'backend',
+    }
+  } catch (e) {
+    console.warn('⚠️ Backend OCR unavailable:', e.message)
+    return null
+  }
+}
+
+/**
+ * Pre-initialize the Tesseract worker (used as fallback).
  */
 export async function initOCR(onProgress) {
   if (_worker) return _worker
@@ -27,7 +65,7 @@ export async function initOCR(onProgress) {
   _initPromise = (async () => {
     const createWorkerFn = getCreateWorker()
     if (!createWorkerFn) {
-      console.warn('createWorker function not found on Tesseract export')
+      console.warn('Tesseract.createWorker not found')
       return null
     }
 
@@ -38,9 +76,6 @@ export async function initOCR(onProgress) {
         },
       })
 
-      // PSM 6 = Assume a single uniform block of text.
-      // This is crucial for Indian number plates because bike plates are 2 lines,
-      // and car plates may have spaces between state, district, and sequence numbers.
       await worker.setParameters({
         tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 \n',
         tessedit_pageseg_mode: '6',
@@ -50,7 +85,7 @@ export async function initOCR(onProgress) {
       _worker = worker
       return worker
     } catch (err) {
-      console.warn('Tesseract worker init error:', err)
+      console.warn('Tesseract init error:', err)
       return null
     }
   })()
@@ -60,14 +95,14 @@ export async function initOCR(onProgress) {
 
 /**
  * Enhance canvas image contrast, sharpness, and resolution for maximum OCR accuracy.
- * Upscales by 2.2x and applies dynamic histogram stretch, stroke sharpening,
- * and special handling for EV green plates and white/yellow plates.
+ * Upscales by 2.2x, applies dynamic histogram stretch and stroke sharpening.
+ * Special handling for EV green plates by inverting if detected.
  */
 export function enhancePlateForOCR(sourceCanvas) {
   const srcW = sourceCanvas.width
   const srcH = sourceCanvas.height
 
-  // Upscale 2.2x so character height is 40-60px (ideal for Tesseract neural net)
+  // Upscale 2.2x so character height is 40-60px (ideal for Tesseract)
   const scale = 2.2
   const width = Math.round(srcW * scale)
   const height = Math.round(srcH * scale)
@@ -84,21 +119,18 @@ export function enhancePlateForOCR(sourceCanvas) {
     const imgData = ctx.getImageData(0, 0, width, height)
     const d = imgData.data
 
-    // Detect background color to handle EV plates (green) vs white/yellow plates
+    // Detect background color to identify EV plates (green background)
     const bgColor = detectBackgroundColor(d, width, height)
     const isGreenBg = bgColor.g > Math.max(bgColor.r, bgColor.b) + 30
 
-    // Calculate grayscale
+    // Calculate grayscale and find min/max
     const grays = new Float32Array(width * height)
-    for (let i = 0; i < d.length; i += 4) {
-      grays[i / 4] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
-    }
-
-    // Compute global min/max for contrast stretch
     let min = 255, max = 0
-    for (let i = 0; i < grays.length; i++) {
-      if (grays[i] < min) min = grays[i]
-      if (grays[i] > max) max = grays[i]
+    for (let i = 0; i < d.length; i += 4) {
+      const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
+      grays[i / 4] = g
+      if (g < min) min = g
+      if (g > max) max = g
     }
 
     const range = Math.max(1, max - min)
@@ -112,8 +144,7 @@ export function enhancePlateForOCR(sourceCanvas) {
         // Contrast stretched value 0..255
         let val = Math.round(((g - min) / range) * 255)
 
-        // Special handling for EV green plates: invert if background is green-ish
-        // This makes white text on green become dark on light (better OCR)
+        // Invert if green background (makes white text dark on light)
         if (isGreenBg) {
           val = 255 - val
         }
@@ -134,20 +165,16 @@ export function enhancePlateForOCR(sourceCanvas) {
     ctx.putImageData(imgData, 0, 0)
     return canvas
   } catch (e) {
-    console.warn('Canvas enhance fallback:', e)
+    console.warn('Enhancement fallback:', e)
     return sourceCanvas
   }
 }
 
 /**
- * Detect background color to identify EV plates (green background).
+ * Detect background color by sampling corners.
  */
 function detectBackgroundColor(data, width, height) {
-  // Sample corners and edges (where background typically is, not text)
-  const samplePoints = []
   const margin = Math.floor(Math.min(width, height) * 0.1)
-
-  // Sample corners
   const corners = [
     margin, margin,
     width - margin - 1, margin,
@@ -155,26 +182,21 @@ function detectBackgroundColor(data, width, height) {
     width - margin - 1, height - margin - 1,
   ]
 
+  let avgR = 0, avgG = 0, avgB = 0
   for (let i = 0; i < corners.length; i += 2) {
     const x = corners[i], y = corners[i + 1]
     const idx = (y * width + x) * 4
-    samplePoints.push({ r: data[idx], g: data[idx + 1], b: data[idx + 2] })
+    avgR += data[idx]
+    avgG += data[idx + 1]
+    avgB += data[idx + 2]
   }
-
-  // Average the samples
-  let avgR = 0, avgG = 0, avgB = 0
-  for (const p of samplePoints) {
-    avgR += p.r
-    avgG += p.g
-    avgB += p.b
-  }
-  const n = samplePoints.length
+  const n = corners.length / 2
   return { r: avgR / n, g: avgG / n, b: avgB / n }
 }
 
 /**
- * Dual-line OCR tailored specifically for 2-line Indian two-wheeler plates.
- * Slices top line (State + District + Series) and bottom line (Number) into clean single-line streams.
+ * Dual-line OCR for 2-line Indian two-wheeler plates.
+ * Slices top line (State + District + Series) and bottom line (Number).
  */
 async function runDualLineOCR(canvas, worker) {
   const width = canvas.width
@@ -199,7 +221,6 @@ async function runDualLineOCR(canvas, worker) {
   await worker.setParameters({ tessedit_pageseg_mode: '7' })
   const res1 = await worker.recognize(enhancePlateForOCR(topCanvas))
   const res2 = await worker.recognize(enhancePlateForOCR(botCanvas))
-  // Restore PSM 6
   await worker.setParameters({ tessedit_pageseg_mode: '6' })
 
   const line1 = res1.data.text.trim()
@@ -220,11 +241,8 @@ async function runDualLineOCR(canvas, worker) {
 }
 
 /**
- * Run OCR on an image source.
+ * Run OCR on an image source (Tesseract fallback).
  * Returns normalized plate text, confidence, and line structure.
- *
- * @param {HTMLCanvasElement|string|Blob} imageSource
- * @returns {Promise<{ normalized: string, raw: string, confidence: number, isValid: boolean, isTwoLine: boolean }>}
  */
 export async function runOCR(imageSource) {
   const worker = await initOCR()
@@ -254,7 +272,7 @@ export async function runOCR(imageSource) {
     blockResult.raw = rawText
     blockResult.confidence = Math.round(ocrConf * 0.5 + blockResult.confidence * 0.5)
 
-    // Pass 2: If canvas and not already a validated plate, try dual-line slice (for bike plates)
+    // Pass 2: If canvas and not already valid, try dual-line slice (for bike plates)
     if (imageSource instanceof HTMLCanvasElement && !blockResult.isValid) {
       const dualResult = await runDualLineOCR(imageSource, worker)
       if (dualResult.isValid || dualResult.confidence > blockResult.confidence) {
@@ -264,7 +282,7 @@ export async function runOCR(imageSource) {
 
     return blockResult
   } catch (err) {
-    console.warn('OCR recognition error:', err)
+    console.warn('OCR error:', err)
     return {
       normalized: '',
       raw: '',
@@ -276,7 +294,7 @@ export async function runOCR(imageSource) {
 }
 
 /**
- * Terminate worker.
+ * Terminate Tesseract worker.
  */
 export async function terminateOCR() {
   if (_worker) {
