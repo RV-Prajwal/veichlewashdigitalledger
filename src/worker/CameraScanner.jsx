@@ -30,8 +30,8 @@ export default function CameraScanner({ onScanComplete, onClose, isModelReady })
         const constraints = {
           video: {
             facingMode,
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+            width: { ideal: 1920, min: 1280 },
+            height: { ideal: 1080, min: 720 },
           },
           audio: false,
         }
@@ -297,18 +297,30 @@ export default function CameraScanner({ onScanComplete, onClose, isModelReady })
 
               {/* Aiming Reticle Overlay */}
               <div className="scan-overlay">
-                <div className="scan-frame" style={{ width: '82%', maxWidth: 340, aspectRatio: '2.4 / 1' }}>
+                <div className="scan-frame" style={{ width: '84%', maxWidth: 360, aspectRatio: '2.0 / 1' }}>
                   <div className="scan-corner scan-corner--tl" />
                   <div className="scan-corner scan-corner--tr" />
                   <div className="scan-corner scan-corner--bl" />
                   <div className="scan-corner scan-corner--br" />
+
+                  {/* Dual-line guide for 2-line bike plates */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: '50%',
+                      left: '8%',
+                      right: '8%',
+                      borderTop: '1px dashed rgba(6,214,160,0.25)',
+                      pointerEvents: 'none',
+                    }}
+                  />
 
                   {isProcessing && <div className="scan-line" />}
 
                   <div
                     style={{
                       position: 'absolute',
-                      bottom: -28,
+                      bottom: -32,
                       left: 0,
                       right: 0,
                       textAlign: 'center',
@@ -428,6 +440,13 @@ export default function CameraScanner({ onScanComplete, onClose, isModelReady })
               QUICK TEST PLATES (INSTANT SIMULATION)
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => handleSamplePlate('KA05KU5996', 'bike')}
+                className="btn btn-ghost btn-sm"
+                style={{ fontFamily: 'var(--font-mono)', fontSize: 12, borderColor: '#06d6a0', color: '#06d6a0' }}
+              >
+                🏍️ KA05KU5996 (Bike)
+              </button>
               <button
                 onClick={() => handleSamplePlate('KA01NC8564', 'car')}
                 className="btn btn-ghost btn-sm"

@@ -26,6 +26,27 @@ const ALPHA_FIXES = {
   '8': 'B',
 }
 
+// Common OCR misreads for Indian state codes when followed by district digits
+const STATE_OCR_FIXES = {
+  YA: 'KA',
+  RA: 'KA',
+  XA: 'KA',
+  PA: 'KA',
+  HA: 'HR',
+  NH: 'MH',
+  OL: 'DL',
+  CL: 'DL',
+  TM: 'TN',
+  T5: 'TS',
+  CJ: 'GJ',
+  VP: 'UP',
+  NP: 'MP',
+  PR: 'BR',
+  DR: 'BR',
+  W8: 'WB',
+  KI: 'KL',
+}
+
 /**
  * Normalizes raw OCR text into a clean Indian vehicle registration plate.
  * Handles both 1-line and 2-line plates (e.g. BR 01 C / J 6440 -> BR01CJ6440).
@@ -87,6 +108,19 @@ export function normalizePlate(raw) {
       cleaned = potentialState + cleaned.slice(2)
       foundStateIdx = 0
       matchedState = potentialState
+    }
+  }
+
+  // Check state OCR confusion mappings (e.g. YA05 / RA05 -> KA05)
+  if (foundStateIdx === -1 && cleaned.length >= 4) {
+    for (const [misread, correctState] of Object.entries(STATE_OCR_FIXES)) {
+      const idx = cleaned.indexOf(misread)
+      if (idx !== -1 && /[0-9]/.test(cleaned[idx + 2])) {
+        cleaned = correctState + cleaned.slice(idx + 2)
+        foundStateIdx = 0
+        matchedState = correctState
+        break
+      }
     }
   }
 

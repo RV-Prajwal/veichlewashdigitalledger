@@ -44,25 +44,34 @@ export async function runScanPipeline(source, onStatusChange) {
     console.warn('Vehicle detection skipped:', e)
   }
 
-  // ── Step 3: Targeted Crop to Aiming Reticle Area ───────────────────────────
+  // ── Step 3: Multi-Window Targeted OCR ─────────────────────────────────────
   onStatusChange(SCAN_STATUS.OCR_RUNNING)
 
-  // First attempt: Crop the central aiming box where the user aligned the plate
+  // Pass 1: Primary Viewfinder Reticle (2.0:1 Aspect Ratio)
   const reticleCanvas = cropReticleArea(bestFrame)
   let ocrResult = await runOCR(reticleCanvas)
 
-  // Fallback attempt: If reticle didn't yield a valid plate, try the full frame
+  // Pass 2: Lower-Center Bike Reticle (where rear bike plates typically sit)
+  if (!ocrResult.isValid) {
+    const bikeCanvas = cropBikePlateArea(bestFrame)
+    const bikeResult = await runOCR(bikeCanvas)
+    if (bikeResult.isValid || (bikeResult.confidence > ocrResult.confidence && bikeResult.normalized.length >= 7)) {
+      ocrResult = bikeResult
+    }
+  }
+
+  // Pass 3: Full Frame Fallback — STRICTLY ONLY accepted if it is a validated Indian plate!
   if (!ocrResult.isValid) {
     const fullResult = await runOCR(bestFrame)
-    if (fullResult.isValid || (fullResult.normalized.length > ocrResult.normalized.length)) {
+    if (fullResult.isValid) {
       ocrResult = fullResult
     }
   }
 
+  // If plate is not valid and low confidence, do not present hallucinated noise
+  const finalPlate = ocrResult.isValid || ocrResult.confidence >= 75 ? ocrResult.normalized : ''
+
   // ── Step 4: Classify Vehicle Type (Car vs. Bike) ───────────────────────────
-  // In India:
-  // - 2-line plates (e.g. BR01C / J6440) are almost exclusively Two-Wheelers / Bikes
-  // - 1-line wide plates are standard Cars
   let vehicleType = 'car'
   if (ocrResult.isTwoLine) {
     vehicleType = 'bike'
@@ -73,19 +82,19 @@ export async function runScanPipeline(source, onStatusChange) {
   }
 
   const elapsed = Math.round(performance.now() - t0)
-  const isConfident = ocrResult.isValid || ocrResult.confidence >= 70
+  const isConfident = Boolean(finalPlate && ocrResult.isValid)
 
   onStatusChange(isConfident ? SCAN_STATUS.HIGH_CONF : SCAN_STATUS.LOW_CONF)
 
   console.log(`🔍 Scan Completed in ${elapsed}ms:`, {
-    normalizedPlate: ocrResult.normalized,
+    normalizedPlate: finalPlate,
     rawText: ocrResult.raw,
     vehicleType,
     isValid: ocrResult.isValid,
   })
 
   return {
-    vehicleNumber:  ocrResult.normalized,
+    vehicleNumber:  finalPlate,
     rawOCR:         ocrResult.raw,
     vehicleType,
     ocrConfidence:  ocrResult.confidence,
@@ -98,15 +107,33 @@ export async function runScanPipeline(source, onStatusChange) {
 }
 
 /**
- * Crops the exact central reticle area corresponding to the viewfinder overlay.
- * Centered horizontally (75% width) and vertically (center 45% height).
+ * Crops the exact central reticle area corresponding to the viewfinder overlay (2.0:1 ratio).
  */
 function cropReticleArea(canvas) {
   const { width, height } = canvas
-  const cropW = Math.floor(width * 0.80)
-  const cropH = Math.floor(height * 0.45)
+  const cropW = Math.floor(width * 0.84)
+  const cropH = Math.min(Math.floor(height * 0.40), Math.floor(cropW / 2.0))
   const startX = Math.floor((width - cropW) / 2)
   const startY = Math.floor((height - cropH) / 2)
+
+  const cropped = document.createElement('canvas')
+  cropped.width  = cropW
+  cropped.height = cropH
+  const ctx = cropped.getContext('2d')
+  ctx.drawImage(canvas, startX, startY, cropW, cropH, 0, 0, cropW, cropH)
+  return cropped
+}
+
+/**
+ * Crops a lower-center window tailored for two-wheeler plates mounted on rear mudguards.
+ */
+function cropBikePlateArea(canvas) {
+  const { width, height } = canvas
+  const cropW = Math.floor(width * 0.80)
+  const cropH = Math.floor(cropW / 1.7)
+  const startX = Math.floor((width - cropW) / 2)
+  // Shifted slightly below vertical center (Y: 53%)
+  const startY = Math.min(height - cropH, Math.floor(height * 0.35))
 
   const cropped = document.createElement('canvas')
   cropped.width  = cropW
