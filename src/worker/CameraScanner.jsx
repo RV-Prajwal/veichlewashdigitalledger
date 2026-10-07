@@ -132,6 +132,14 @@ export default function CameraScanner({ onScanComplete, onClose, isModelReady })
         plateCanvas: result.plateCanvas, // Pass cropped plate preview
         detectionRegion: result.detectionRegion,
       })
+
+      console.log('🚀 CameraScanner -> ConfirmModal data:', {
+        vehicleNumber: result.vehicleNumber,
+        vehicleType: result.vehicleType,
+        ocrConfidence: result.ocrConfidence,
+        rawOCR: result.rawOCR,
+        hasPlateCanvas: !!result.plateCanvas,
+      })
     } catch (err) {
       console.error('Scan error:', err)
       setStatus(SCAN_STATUS.ERROR)

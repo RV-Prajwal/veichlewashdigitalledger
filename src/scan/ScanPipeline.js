@@ -124,7 +124,9 @@ export async function runScanPipeline(source, onStatusChange) {
     }
   }
 
-  const finalPlate = bestResult.isValid || bestResult.confidence >= 85
+  // Always show extracted text if we have something plausible (even low confidence)
+  // Workers can manually correct if needed - better than starting from blank
+  const finalPlate = bestResult.normalized && bestResult.normalized.length >= 7
     ? bestResult.normalized
     : ''
 
@@ -149,6 +151,15 @@ export async function runScanPipeline(source, onStatusChange) {
   onStatusChange(isConfident ? SCAN_STATUS.HIGH_CONF : SCAN_STATUS.LOW_CONF)
 
   console.log(`✅ Scan (${elapsed}ms, ${bestResult.ocrMethod}): ${finalPlate} (${bestResult.confidence}%)`)
+  console.log('📊 Full Result:', {
+    vehicleNumber: finalPlate,
+    rawOCR: bestResult.raw,
+    normalized: bestResult.normalized,
+    confidence: bestResult.confidence,
+    isValid: bestResult.isValid,
+    vehicleType,
+    region: bestResult.region,
+  })
 
   return {
     vehicleNumber:  finalPlate,
