@@ -11,7 +11,7 @@ export default function CameraScanner({ onScanComplete, onClose, isModelReady })
   const [stream, setStream] = useState(null)
   const [cameraError, setCameraError] = useState(null)
   const [status, setStatus] = useState(SCAN_STATUS.IDLE)
-  const [statusMessage, setStatusMessage] = useState('Position number plate in frame')
+  const [statusMessage, setStatusMessage] = useState('Aim at vehicle front or rear')
   const [isProcessing, setIsProcessing] = useState(false)
   const [scanLatency, setScanLatency] = useState(null)
   const [torchOn, setTorchOn] = useState(false)
@@ -30,8 +30,8 @@ export default function CameraScanner({ onScanComplete, onClose, isModelReady })
         const constraints = {
           video: {
             facingMode,
-            width: { ideal: 1920, min: 1280 },
-            height: { ideal: 1080, min: 720 },
+            width: { ideal: 2560, min: 1920 },
+            height: { ideal: 1440, min: 1080 },
           },
           audio: false,
         }
@@ -105,13 +105,13 @@ export default function CameraScanner({ onScanComplete, onClose, isModelReady })
     const startTime = performance.now()
 
     try {
-      setStatusMessage('Scanning frame & detecting vehicle...')
+      setStatusMessage('Capturing high-resolution frame...')
       const result = await runScanPipeline(videoRef.current, (newStatus) => {
         setStatus(newStatus)
         if (newStatus === SCAN_STATUS.DETECTING) {
-          setStatusMessage('Detecting vehicle type (Car/Bike)...')
+          setStatusMessage('Locating number plate & reading OCR...')
         } else if (newStatus === SCAN_STATUS.OCR_RUNNING) {
-          setStatusMessage('Reading number plate OCR...')
+          setStatusMessage('Extracting vehicle registration...')
         }
       })
 
@@ -129,6 +129,8 @@ export default function CameraScanner({ onScanComplete, onClose, isModelReady })
         ocrConfidence: result.ocrConfidence || 85,
         elapsedMs: totalTime,
         rawOCR: result.rawOCR || '',
+        plateCanvas: result.plateCanvas, // Pass cropped plate preview
+        detectionRegion: result.detectionRegion,
       })
     } catch (err) {
       console.error('Scan error:', err)
@@ -295,42 +297,53 @@ export default function CameraScanner({ onScanComplete, onClose, isModelReady })
                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
               />
 
-              {/* Aiming Reticle Overlay */}
+              {/* Wide Target Area Overlay (Corner Brackets Only) */}
               <div className="scan-overlay">
-                <div className="scan-frame" style={{ width: '84%', maxWidth: 360, aspectRatio: '2.0 / 1' }}>
+                <div className="scan-frame-wide" style={{ width: '90%', height: '70%' }}>
+                  {/* Corner brackets indicating wide capture area */}
                   <div className="scan-corner scan-corner--tl" />
                   <div className="scan-corner scan-corner--tr" />
                   <div className="scan-corner scan-corner--bl" />
                   <div className="scan-corner scan-corner--br" />
 
-                  {/* Dual-line guide for 2-line bike plates */}
+                  {isProcessing && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '50%',
+                        left: '50%',
+                        transform: 'translate(-50%, -50%)',
+                        background: 'rgba(6,214,160,0.15)',
+                        border: '2px solid rgba(6,214,160,0.6)',
+                        borderRadius: 12,
+                        padding: '16px 24px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 12,
+                        backdropFilter: 'blur(10px)',
+                      }}
+                    >
+                      <div className="spinner spinner--accent" style={{ width: 20, height: 20 }} />
+                      <span style={{ color: '#06d6a0', fontWeight: 700, fontSize: 14 }}>
+                        Analyzing Frame...
+                      </span>
+                    </div>
+                  )}
+
                   <div
                     style={{
                       position: 'absolute',
-                      top: '50%',
-                      left: '8%',
-                      right: '8%',
-                      borderTop: '1px dashed rgba(6,214,160,0.25)',
-                      pointerEvents: 'none',
-                    }}
-                  />
-
-                  {isProcessing && <div className="scan-line" />}
-
-                  <div
-                    style={{
-                      position: 'absolute',
-                      bottom: -32,
+                      bottom: -38,
                       left: 0,
                       right: 0,
                       textAlign: 'center',
-                      fontSize: 12,
+                      fontSize: 13,
                       fontWeight: 600,
-                      color: 'rgba(255,255,255,0.7)',
-                      textShadow: '0 2px 4px rgba(0,0,0,0.8)',
+                      color: 'rgba(255,255,255,0.8)',
+                      textShadow: '0 2px 6px rgba(0,0,0,0.9)',
                     }}
                   >
-                    FIT PLATE INSIDE FRAME
+                    📸 Aim at vehicle • Plate detected automatically
                   </div>
                 </div>
               </div>

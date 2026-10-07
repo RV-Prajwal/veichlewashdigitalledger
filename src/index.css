@@ -467,6 +467,12 @@ a { color: inherit; text-decoration: none; }
   width: 80%; max-width: 320px;
   aspect-ratio: 2.5 / 1;
 }
+.scan-frame-wide {
+  position: relative;
+  width: 90%; max-width: 420px;
+  height: 70%;
+  max-height: 320px;
+}
 .scan-corner {
   position: absolute;
   width: 24px; height: 24px;

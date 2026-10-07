@@ -186,6 +186,35 @@ export default function ConfirmModal({ scanData, worker, onSaved, onCancel }) {
 
         {/* Form Body */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* Cropped Plate Preview Thumbnail */}
+          {scanData.plateCanvas && (
+            <div style={{ textAlign: 'center', marginBottom: 8 }}>
+              <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6, textTransform: 'uppercase', fontWeight: 600 }}>
+                Detected Plate Preview
+              </div>
+              <canvas
+                ref={(el) => {
+                  if (el && scanData.plateCanvas) {
+                    el.width = scanData.plateCanvas.width
+                    el.height = scanData.plateCanvas.height
+                    const ctx = el.getContext('2d')
+                    ctx.drawImage(scanData.plateCanvas, 0, 0)
+                  }
+                }}
+                style={{
+                  maxWidth: '100%',
+                  height: 'auto',
+                  border: '2px solid rgba(6,214,160,0.3)',
+                  borderRadius: 8,
+                  background: '#000',
+                }}
+              />
+              <div style={{ fontSize: 10, color: '#64748b', marginTop: 4 }}>
+                Region: {scanData.detectionRegion || 'auto'} • {scanData.elapsedMs || 0}ms
+              </div>
+            </div>
+          )}
+
           {/* Registration Number Field */}
           <div className="input-group">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

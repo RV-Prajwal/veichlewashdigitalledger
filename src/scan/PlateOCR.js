@@ -60,7 +60,8 @@ export async function initOCR(onProgress) {
 
 /**
  * Enhance canvas image contrast, sharpness, and resolution for maximum OCR accuracy.
- * Upscales by 2.2x and applies dynamic histogram stretch and stroke sharpening.
+ * Upscales by 2.2x and applies dynamic histogram stretch, stroke sharpening,
+ * and special handling for EV green plates and white/yellow plates.
  */
 export function enhancePlateForOCR(sourceCanvas) {
   const srcW = sourceCanvas.width
@@ -83,15 +84,21 @@ export function enhancePlateForOCR(sourceCanvas) {
     const imgData = ctx.getImageData(0, 0, width, height)
     const d = imgData.data
 
-    let min = 255
-    let max = 0
-    const grays = new Float32Array(width * height)
+    // Detect background color to handle EV plates (green) vs white/yellow plates
+    const bgColor = detectBackgroundColor(d, width, height)
+    const isGreenBg = bgColor.g > Math.max(bgColor.r, bgColor.b) + 30
 
+    // Calculate grayscale
+    const grays = new Float32Array(width * height)
     for (let i = 0; i < d.length; i += 4) {
-      const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
-      grays[i / 4] = g
-      if (g < min) min = g
-      if (g > max) max = g
+      grays[i / 4] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
+    }
+
+    // Compute global min/max for contrast stretch
+    let min = 255, max = 0
+    for (let i = 0; i < grays.length; i++) {
+      if (grays[i] < min) min = grays[i]
+      if (grays[i] > max) max = grays[i]
     }
 
     const range = Math.max(1, max - min)
@@ -101,8 +108,15 @@ export function enhancePlateForOCR(sourceCanvas) {
       for (let x = 0; x < width; x++) {
         const idx = y * width + x
         const g = grays[idx]
+
         // Contrast stretched value 0..255
         let val = Math.round(((g - min) / range) * 255)
+
+        // Special handling for EV green plates: invert if background is green-ish
+        // This makes white text on green become dark on light (better OCR)
+        if (isGreenBg) {
+          val = 255 - val
+        }
 
         // Mild high-frequency boost on horizontal strokes
         if (x > 0 && x < width - 1) {
@@ -123,6 +137,39 @@ export function enhancePlateForOCR(sourceCanvas) {
     console.warn('Canvas enhance fallback:', e)
     return sourceCanvas
   }
+}
+
+/**
+ * Detect background color to identify EV plates (green background).
+ */
+function detectBackgroundColor(data, width, height) {
+  // Sample corners and edges (where background typically is, not text)
+  const samplePoints = []
+  const margin = Math.floor(Math.min(width, height) * 0.1)
+
+  // Sample corners
+  const corners = [
+    margin, margin,
+    width - margin - 1, margin,
+    margin, height - margin - 1,
+    width - margin - 1, height - margin - 1,
+  ]
+
+  for (let i = 0; i < corners.length; i += 2) {
+    const x = corners[i], y = corners[i + 1]
+    const idx = (y * width + x) * 4
+    samplePoints.push({ r: data[idx], g: data[idx + 1], b: data[idx + 2] })
+  }
+
+  // Average the samples
+  let avgR = 0, avgG = 0, avgB = 0
+  for (const p of samplePoints) {
+    avgR += p.r
+    avgG += p.g
+    avgB += p.b
+  }
+  const n = samplePoints.length
+  return { r: avgR / n, g: avgG / n, b: avgB / n }
 }
 
 /**
