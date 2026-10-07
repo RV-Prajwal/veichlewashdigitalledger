@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f1729"/>
+      <stop offset="100%" stop-color="#070d1c"/>
+    </linearGradient>
+    <linearGradient id="primary" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#06d6a0"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="100" fill="url(#bg)"/>
+  <rect x="24" y="24" width="464" height="464" rx="80" fill="none" stroke="url(#primary)" stroke-width="8" opacity="0.4"/>
+  <g transform="translate(106, 126)">
+    <!-- Car body -->
+    <path d="M40 180 L260 180 C275 180 290 165 285 140 L260 70 C250 40 220 30 190 30 L110 30 C80 30 50 40 40 70 L15 140 C10 165 25 180 40 180 Z" fill="url(#primary)"/>
+    <!-- Windows -->
+    <path d="M60 80 L135 80 L135 130 L40 130 Z" fill="#070d1c" opacity="0.8"/>
+    <path d="M165 80 L240 80 L260 130 L165 130 Z" fill="#070d1c" opacity="0.8"/>
+    <!-- Wheels -->
+    <circle cx="70" cy="190" r="35" fill="#070d1c" stroke="#3b82f6" stroke-width="8"/>
+    <circle cx="230" cy="190" r="35" fill="#070d1c" stroke="#06d6a0" stroke-width="8"/>
+    <!-- Water Bubbles -->
+    <circle cx="150" cy="10" r="16" fill="#60a5fa" opacity="0.75"/>
+    <circle cx="210" cy="-15" r="12" fill="#06d6a0" opacity="0.8"/>
+    <circle cx="90" cy="-8" r="14" fill="#38bdf8" opacity="0.7"/>
+  </g>
+</svg>

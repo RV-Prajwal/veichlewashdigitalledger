@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.email.matches('.*admin.*') ||
+        (exists(/databases/$(database)/documents/workers/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/workers/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    // ─── WORKERS COLLECTION ──────────────────────────────────────────────────
+    // Users can create/read their own profile document; Admins manage all
+    match /workers/{workerId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (isOwner(workerId) || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
+    // ─── SERVICES COLLECTION ─────────────────────────────────────────────────
+    // Any authenticated worker/admin can read wash services; Admins can create/edit
+    match /services/{serviceId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ─── TRANSACTIONS (DIGITAL LEDGER) ──────────────────────────────────────
+    match /transactions/{txId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+
+    // ─── AUDIT LOGS ──────────────────────────────────────────────────────────
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if false; // Immutable audit trail
+    }
+  }
+}
